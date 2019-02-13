@@ -5,7 +5,13 @@ stt_sb_install () {
     echo "1/2 Preparation of dependencies"
     if [ "$platform" = "linux" ]; then
         if [ "$jv_os_name" == "raspbian" ]; then
-            if [ "$jv_os_version" == 8 ]; then
+            if [ "$jv_os_version" -ge 8 ]; then
+                sb_supported_os=true
+                binaries="rpi-arm-raspbian-8.0-1.1.0"
+                jv_install libpython2.7 #755
+            fi
+        elif [ "$jv_os_name" == "osmc" ]; then #628
+            if [[ "$(cat /etc/debian_version)" -ge 8 ]]; then
                 sb_supported_os=true
                 binaries="rpi-arm-raspbian-8.0-1.1.0"
             fi
@@ -216,7 +222,10 @@ stt_sb_train () {
     [ -z "$force_retrain" ] && [[ -f "stt_engines/snowboy/resources/$sanitized.pmdl" || -f "stt_engines/snowboy/resources/$sanitized.umdl" ]] && return 0
     
     # check token is in config
-    [ -z "$snowboy_token" ] && configure "snowboy_token"
+    if [ -z "$snowboy_token" ]; then
+        configure "snowboy_token"
+        [ -n "$snowboy_token" ] || return 1
+    fi
     
     # record 3 audio samples of the hotword
     dialog_msg "We will record now 3 audio samples of '$hotword'\nSample #1\nPres [Enter], say '$hotword' then hit Ctrl+C"

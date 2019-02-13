@@ -36,11 +36,13 @@ jv_menu_main () {
                     options=('Step-by-step wizard'
                              'General'
                              'Phrases'
-                             'Hooks'
                              'Audio'
                              'Voice recognition'
-                             'Speech synthesis')
+                             'Speech synthesis'
+                             'Hooks')
                     case "`dialog_menu 'Configuration' options[@]`" in
+                        "Step-by-step wizard")
+                            wizard;;
                         "General")
                             while true; do
                                 options=("Username ($username)"
@@ -78,74 +80,54 @@ jv_menu_main () {
                                     *) break;;
                                 esac
                             done;;
-                        "Hooks")
-                        while true; do
-                            options=("Program startup"
-                                     "Start listening"
-                                     "Stop listening"
-                                     "Listening timeout"
-                                     "Entering command mode"
-                                     "Start speaking"
-                                     "Stop speaking"
-                                     "Exiting command mode"
-                                     "Program exit")
-                            case "`dialog_menu 'Configuration > Hooks' options[@]`" in
-                                Program*startup*)   configure "program_startup";;
-                                Program*exit*)      configure "program_exit";;
-                                Entering*)          configure "entering_cmd";;
-                                Exiting*)           configure "exiting_cmd";;
-                                Listening*timeout)  configure "listening_timeout";;
-                                Start*listening*)   configure "start_listening";;
-                                Stop*listening*)    configure "stop_listening";;
-                                Start*speaking*)    configure "start_speaking";;
-                                Stop*speaking*)     configure "stop_speaking";;
-                                *) break;;
-                            esac
-                        done;;
                         "Audio")
                             while true; do
                                 options=("Speaker ($play_hw)"
                                          "Mic ($rec_hw)"
+                                         "Bluetooth (experimental)"
                                          "Recorder ($recorder)"
                                          "Auto-adjust levels"
                                          "Volume"
                                          "Tempo ($tempo)"
                                          "Sensitivity"
                                          "Gain ($gain)"
+                                         "Timeout ($jv_timeout)"
                                          "Min noise duration to start ($min_noise_duration_to_start)"
                                          "Min noise perc to start ($min_noise_perc_to_start)"
                                          "Min silence duration to stop ($min_silence_duration_to_stop)"
                                          "Min silence level to stop ($min_silence_level_to_stop)")
                                 case "`dialog_menu 'Configuration > Audio' options[@]`" in
-                                    Speaker*)  configure "play_hw";;
-                                    Mic*)      configure "rec_hw";;
-                                    Recorder*) configure "recorder";;
-                                    Auto*)     jv_auto_levels;;
-                                    Volume) if [ "$platform" == "osx" ]; then
-                                                osascript <<EOM
-                                                    tell application "System Preferences"
-                                                        activate
-                                                        set current pane to pane "com.apple.preference.sound"
-                                                        reveal (first anchor of current pane whose name is "output")
-                                                    end tell
+                                    Speaker*)   configure "play_hw";;
+                                    Mic*)       configure "rec_hw";;
+                                    Recorder*)  configure "recorder";;
+                                    Bluetooth*) jv_bt_menu;;
+                                    Auto*)      jv_auto_levels;;
+                                    Volume)     if [ "$platform" == "osx" ]; then
+                                                    osascript <<EOM
+                                                        tell application "System Preferences"
+                                                            activate
+                                                            set current pane to pane "com.apple.preference.sound"
+                                                            reveal (first anchor of current pane whose name is "output")
+                                                        end tell
 EOM
-                                            else
-                                                alsamixer -c ${play_hw:3:1} -V playback || read -p "ERROR: check above"
-                                            fi;;
+                                                else
+                                                    alsamixer -c ${play_hw:3:1} -V playback || read -p "ERROR: check above"
+                                                fi;;
                                     Tempo*)     configure "tempo";;
                                     Sensitivity)
-                                    if [ "$platform" == "osx" ]; then
-                                                osascript <<EOM
-                                                    tell application "System Preferences"
-                                                        activate
-                                                        set current pane to pane "com.apple.preference.sound"
-                                                        reveal (first anchor of current pane whose name is "input")
-                                                    end tell
+                                                if [ "$platform" == "osx" ]; then
+                                                    osascript <<EOM
+                                                        tell application "System Preferences"
+                                                            activate
+                                                            set current pane to pane "com.apple.preference.sound"
+                                                            reveal (first anchor of current pane whose name is "input")
+                                                        end tell
 EOM
-                                            else
-                                                alsamixer -c ${rec_hw:3:1} -V capture || read -p "ERROR: check above"
-                                            fi;;
+                                                else
+                                                    alsamixer -c ${rec_hw:3:1} -V capture || read -p "ERROR: check above"
+                                                fi;;
                                     Gain*)            configure "gain";;
+                                    Timeout*)         configure "jv_timeout";;
                                     *duration*start*) configure "min_noise_duration_to_start";;
                                     *perc*start*)     configure "min_noise_perc_to_start";;
                                     *duration*stop*)  configure "min_silence_duration_to_stop";;
@@ -158,6 +140,7 @@ EOM
                                 options=("Recognition of magic word ($trigger_stt)"
                                          "Recognition of commands ($command_stt)"
                                          "Snowboy settings"
+                                         "Google settings"
                                          "Bing settings"
                                          "Wit settings"
                                          "PocketSphinx setting")
@@ -173,13 +156,24 @@ EOM
                                                      "Check ticks ($snowboy_checkticks)")
                                             case "`dialog_menu 'Settings > Voice recognition > Snowboy' options[@]`" in
                                                 Check*)         configure "snowboy_checkticks";;
-                                                Show*)          IFS=','; dialog_msg "Models stored in stt_engines/snowboy/resources/:\n${snowboy_models[*]}";;
+                                                Show*)          source stt_engines/snowboy/main.sh
+                                                                IFS=','; dialog_msg "Models stored in stt_engines/snowboy/resources/:\n${snowboy_models[*]}";;
                                                 Sensitivity*)   configure "snowboy_sensitivity";;
                                                 Token*)         configure "snowboy_token";;
-                                                Train*)         stt_sb_train "$(dialog_input "Hotword / Quick Command to (re-)train" "$trigger")" true;;
+                                                Train*)         source stt_engines/snowboy/main.sh
+                                                                stt_sb_train "$(dialog_input "Hotword / Quick Command to (re-)train" "$trigger")" true
+                                                                ;;
                                                 *) break;;
                                             esac
                                         done;;
+                                    Google*)
+                                            while true; do
+                                                options=("Google key ($google_speech_api_key)")
+                                                case "`dialog_menu 'Settings > Voice recognition > Google' options[@]`" in
+                                                    Google*key*)  configure "google_speech_api_key";;
+                                                    *) break;;
+                                                esac
+                                            done;;
                                     Bing*)
                                             while true; do
                                                 options=("Bing key ($bing_speech_api_key)")
@@ -221,8 +215,30 @@ EOM
                                     *) break;;
                                 esac
                             done;;
-                        "Step-by-step wizard")
-                            wizard;;
+                        "Hooks")
+                            while true; do
+                                options=("Program startup"
+                                         "Start listening"
+                                         "Stop listening"
+                                         "Listening timeout"
+                                         "Entering command mode"
+                                         "Start speaking"
+                                         "Stop speaking"
+                                         "Exiting command mode"
+                                         "Program exit")
+                                case "`dialog_menu 'Configuration > Hooks' options[@]`" in
+                                    Program*startup*)   configure "program_startup";;
+                                    Program*exit*)      configure "program_exit";;
+                                    Entering*)          configure "entering_cmd";;
+                                    Exiting*)           configure "exiting_cmd";;
+                                    Listening*timeout)  configure "listening_timeout";;
+                                    Start*listening*)   configure "start_listening";;
+                                    Stop*listening*)    configure "stop_listening";;
+                                    Start*speaking*)    configure "start_speaking";;
+                                    Stop*speaking*)     configure "stop_speaking";;
+                                    *) break;;
+                                esac
+                            done;;
                         *) break;;
                     esac
                 done
@@ -248,26 +264,26 @@ EOM
             Help*)
                 dialog_msg <<EOM
     A question?
-    http://domotiquefacile.fr/jarvis/content/support
+    http://openjarvis.com/content/support
 
     A problem or enhancement request?
     Create a ticket on GitHub
     https://github.com/alexylem/jarvis/issues/new
 
     Just want to discuss?
-    http://domotiquefacile.fr/jarvis/content/disqus
+    http://openjarvis.com/content/disqus
 EOM
                 ;;
             "About") dialog_msg <<EOM
     JARVIS
     By Alexandre Mély
 
-    http://domotiquefacile.fr/jarvis
+    http://openjarvis.com
     alexandre.mely@gmail.com
     (I don't give support via email, please check Help)
 
     You like Jarvis? consider making a 1€ donation:
-    http://domotiquefacile.fr/jarvis/content/credits
+    http://openjarvis.com/content/credits
 
     JARVIS is freely distributable under the terms of the MIT license.
 EOM

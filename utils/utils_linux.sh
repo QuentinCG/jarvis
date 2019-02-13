@@ -18,7 +18,7 @@ dialog_input () { # usage dialog_input "question" "default" true
     
     while true; do
         result=$(whiptail --inputbox "$question" 20 76 "$default" 3>&1 1>&2 2>&3) # don't put local or else return code always O
-        if (( $? )); then
+        if (( $? )); then # cancel
             echo "$default"
         elif [ -n "$result" ]; then # if not null
             echo "$result"
@@ -92,8 +92,7 @@ jv_is_installed () {
 # 
 #   jv_install mpg123
 jv_install () {
-    sudo apt-get install -y $@
-    sudo apt-get clean
+    sudo apt-get install -y $@ && sudo apt-get clean
 }
 
 # Public: remove packages, used for uninstalls

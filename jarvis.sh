@@ -1,12 +1,12 @@
 #!/bin/bash
 # +----------------------------------------+
 # | JARVIS by Alexandre Mély - MIT license |
-# | http://domotiquefacile.fr/jarvis       |
+# | http://openjarvis.com                  |
 # +----------------------------------------+
 flags='bc:ihjklmnp:qrs:uvwx:z'
 jv_show_help () { cat <<EOF
 
-    Usage: ${0##*/} [-$flags]
+    Usage: jarvis [-$flags]
 
     Jarvis.sh is a lightweight configurable multi-lang voice assistant
     Meant for home automation running on slow computer (ex: Raspberry Pi)
@@ -36,10 +36,22 @@ jv_show_help () { cat <<EOF
 EOF
 }
 
-headline="NEW: Adjust playback speed in Settings > Audio > Tempo"
+headline="NEW: Update default timeout in Settings > Audio"
 
-# Move to Jarvis directory
-export jv_dir="$(cd -P "$(dirname "${BASH_SOURCE[0]}")" && pwd)" # why export?
+# Public: get absolute path of current script, even if called via symbolic link
+jv_get_current_dir () {
+    SOURCE="${BASH_SOURCE[0]}"
+    while [ -h "$SOURCE" ]; do # resolve $SOURCE until the file is no longer a symlink
+      DIR="$( cd -P "$( dirname "$SOURCE" )" && pwd )"
+      SOURCE="$(readlink "$SOURCE")"
+      [[ $SOURCE != /* ]] && SOURCE="$DIR/$SOURCE" # if $SOURCE was a relative symlink, we need to resolve it relative to the path where the symlink file was located
+    done
+    echo "$( cd -P "$( dirname "$SOURCE" )" && pwd )"
+}
+#export jv_dir="$(cd -P "$(dirname "${BASH_SOURCE[0]}")" && pwd)" # why export?
+jv_dir="$(jv_get_current_dir)"
+
+# move to jarvis directory
 cd "$jv_dir" # needed now for git used in automatic update
 
 shopt -s nocasematch # string comparison case insensitive
@@ -47,6 +59,12 @@ source utils/utils.sh # needed for wizard / platform error
 source utils/store.sh # needed for plugin installation & store menu
 source utils/audio.sh # needed for jv_auto_levels
 source utils/configure.sh # needed to configure jarvis
+
+# Check not ran as root
+if [ "$EUID" -eq 0 ]; then
+    echo "ERROR: Jarvis must not be used as root" 1>&2 # not jv_error because test needs no-color
+    exit 1
+fi
 
 # Check platform compatibility
 dependencies=(awk curl git iconv jq nano perl sed sox wget)
@@ -99,17 +117,10 @@ just_say=false
 just_listen=false
 just_execute=false
 no_menu=false
-jv_json=false
+jv_do_start_in_background=false
 while getopts ":$flags" o; do
     case "${o}" in
-		b)  # Check if Jarvis is already running in background
-            if jv_is_started; then
-                jv_error "Jarvis is already running"
-                jv_warning "run ./jarvis.sh -q to stop it"
-                exit 1
-            fi
-            jv_start_in_background
-            exit;;
+		b)  jv_do_start_in_background=true;;
         c)  conversation_mode_override=${OPTARG};;
         h)  jv_show_help
             exit;;
@@ -138,6 +149,10 @@ while getopts ":$flags" o; do
         r)  source uninstall.sh
             exit $?;;
         s)	just_say="${OPTARG}"
+            if [ -z "$just_say" ]; then
+                jv_error "ERROR: phrase cannot be empty"
+                exit 1
+            fi
             jv_api=true;;
         u)  configure "load" #498 
             jv_check_updates "./" true # force udpate
@@ -153,31 +168,48 @@ while getopts ":$flags" o; do
             fi
             jv_api=true;;
         z)  jv_build
-            exit;;
-        *)	echo "Usage: $0 [-$flags]" 1>&2; exit 1;;
+            exit $?;;
+        *)	echo -e "jarvis: invalid option\nTry 'jarvis -h' for more information." 1>&2
+            exit 1;;
     esac
 done
 
-# Check not ran as root
-if [ "$EUID" -eq 0 ]; then
-    jv_error "ERROR: Jarvis must not be used as root"
-    exit 1
+if $jv_do_start_in_background; then
+    # Check if Jarvis is already running in background
+    if jv_is_started; then
+        jv_error "Jarvis is already running"
+        jv_warning "run jarvis -q to stop it"
+        exit 1
+    fi
+    jv_start_in_background
+    exit
+fi
+
+if $jv_api; then # if using api all output to jarvis log in addition to stdout
+    exec > >(tee >(jv_add_timestamps >> jarvis.log)) 2>&1
+fi
+
+# create symlink to jarvis if not already exists
+# after -j flag
+if [ -h /usr/local/bin/jarvis ]; then
+    [ "$(basename "$0")" != 'jarvis' ] && jv_debug "Notice: you can use 'jarvis' instead of '$0'"
+else
+    sudo ln -s "$jv_dir/jarvis.sh" /usr/local/bin/jarvis
 fi
 
 # check dependencies
 jv_check_dependencies
 # load user settings if exist else launch install wizard
 configure "load" || wizard
+# activate bluetooth if needed
+$jv_use_bluetooth && jv_bt_init
 # send google analytics hit
 $send_usage_stats && ( jv_ga_send_hit & )
 
 trigger_sanitized=$(jv_sanitize "$trigger")
 [ -n "$conversation_mode_override" ] && conversation_mode=$conversation_mode_override
-source recorders/$recorder/main.sh
-source stt_engines/$trigger_stt/main.sh
-source stt_engines/$command_stt/main.sh
-source tts_engines/$tts_engine/main.sh
 
+# don't think this is really needed
 if ( [ "$play_hw" != "false" ] || [ "$rec_hw" != "false" ] ) && [ ! -f ~/.asoundrc ]; then
     update_alsa $play_hw $rec_hw  # retro compatibility
     dialog_msg<<EOM
@@ -225,19 +257,46 @@ if [ "$jv_api" == false ]; then
 
     # Dump config in troubleshooting mode
     if [ $verbose = true ]; then
-        if [ "$play_hw" != "false" ]; then
+        if [ -n "$play_hw" ] && [ "$play_hw" != "false" ]; then
             play_path="/proc/asound/card${play_hw:3:1}"
             [ -e "$play_path/usbid" ] && speaker=$(lsusb -d $(cat "$play_path/usbid") | cut -c 34-) || speaker=$(cat "$play_path/id")
         else
             speaker="Default"
         fi
-        [ "$rec_hw" != "false" ] && microphone=$(lsusb -d $(cat /proc/asound/card${rec_hw:3:1}/usbid) | cut -c 34-) || microphone="Default"
+        [ -n "$rec_hw" ] && [ "$rec_hw" != "false" ] && microphone=$(lsusb -d $(cat /proc/asound/card${rec_hw:3:1}/usbid) | cut -c 34-) || microphone="Default"
         echo -e "$_gray\n------------ Config ------------"
         for parameter in jv_branch jv_version jv_arch jv_os_name jv_os_version language play_hw rec_hw speaker microphone recorder trigger_stt command_stt tts_engine; do
             printf "%-20s %s \n" "$parameter" "${!parameter}"
         done
         echo -e "--------------------------------\n$_reset"
     fi
+fi
+
+if [ -n "$rec_hw" ]; then
+    source recorders/$recorder/main.sh
+    source stt_engines/$trigger_stt/main.sh || {
+        jv_error "ERROR: invalid hotword recognition engine ($trigger_stt)"
+        jv_warning "HELP: jarvis > Settings > Voice Reco > Reco of hotword"
+        jv_exit 1
+    }
+    source stt_engines/$command_stt/main.sh || {
+        jv_error "ERROR: invalid command recognition engine ($trigger_stt)"
+        jv_warning "HELP: jarvis > Settings > Voice Reco > Reco of commands"
+        jv_exit 1
+    }
+else
+    keyboard=true
+    jv_warning "No mic configured, forcing keyboard mode"
+fi
+if [ -n "$play_hw" ]; then
+    source tts_engines/$tts_engine/main.sh || {
+        jv_error "ERROR: invalid speech synthesis engine ($trigger_stt)"
+        jv_warning "HELP: jarvis > Settings > Speech synthesis > Engine"
+        jv_exit 1
+    }
+else
+    quiet=true
+    jv_warning "No speaker configured, forcing mute mode"
 fi
 
 # Include user functions before just_say because user start/stop_speaking may use them
@@ -296,7 +355,7 @@ jv_handle_order() {
             fi
         else
             [ "${line:0:1}" = ">" ] && continue #https://github.com/alexylem/jarvis/issues/305
-            patterns=${line%==*} # *HELLO*|*GOOD*MORNING*==say Hi => *HELLO*|*GOOD*MORNING*
+            patterns=${line%%==*} # *HELLO*|*GOOD*MORNING*==say Hi => *HELLO*|*GOOD*MORNING*
     		IFS='|' read -ra ARR <<< "$patterns" # *HELLO*|*GOOD*MORNING* => [*HELLO*, *GOOD*MORNING*]
     		for pattern in "${ARR[@]}"; do # *HELLO*
     			regex="^${pattern//'*'/.*}$" # .*HELLO.*
@@ -326,6 +385,7 @@ jv_handle_order() {
     fi
 }
 
+# Internal:
 handle_orders() {
     if [ -z "$separator" ]; then
         jv_handle_order "$1"
@@ -384,7 +444,7 @@ while true; do
         if [ $keyboard = true ]; then
             bypass=true
     		printf "$_cyan$username$_reset: "
-            read order
+            read order 2>/dev/null || { while :; do sleep 2073600; done } # read fails if in background, just wait forever
     	else
     		if [ "$trigger_mode" = "enter_key" ]; then
     			bypass=true
@@ -423,7 +483,7 @@ while true; do
                 
                 if $jv_is_paused; then
                     echo "paused"
-                    $verbose && jv_debug "to resume, run: ./jarvis.sh and select Resume"
+                    $verbose && jv_debug "to resume, run: jarvis and select Resume"
                     wait # until signal
                     continue 2
                 fi
